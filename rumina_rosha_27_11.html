@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rumina Rosha</title>
+    <!-- Подключение библиотеки Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <!-- Стили для карты -->
+    <style>
+        #map { height: 95vh; }
+        .leaflet-tile {
+            filter: grayscale(95%);
+        }
+        #fullscreen-image {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+        #fullscreen-image img {
+            max-width: 90%;
+            max-height: 90%;
+            object-fit: contain;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="fullscreen-image">
+        <img id="expanded-image" src="" alt="Expanded Image">
+    </div>
+
+    <script>
+        // Функция для получения динамической ссылки на JSON файл
+        async function fetchJsonLink() {
+            const jsonLink = 'https://disk.yandex.ru/d/9vZnVYx4flT6jw'; // ВСТАВИТЬ ССЫЛКУ СЮДА НА JSON
+            const apiUrl = `https://cloud-api.yandex.net/v1/disk/public/resources?public_key=${jsonLink}`;
+            
+            try {
+                const response = await fetch(apiUrl);
+                const jsonData = await response.json();
+                return jsonData.file; // Возвращаем динамическую ссылку на JSON файл
+            } catch (error) {
+                console.error('Error fetching JSON link:', error);
+                return null;
+            }
+        }
+
+        // Функция для получения ссылок по public_key и file_name
+        async function fetchFileUrls(publicKey, fileName) {
+            const apiUrl = `https://cloud-api.yandex.net/v1/disk/public/resources?public_key=https://disk.yandex.ru/d/6UJtmQCBuIot5Q&path=%2F${fileName}`;
+            try {
+                const response = await fetch(apiUrl);
+                const data = await response.json();
+
+                let originalUrl = '';
+                let mUrl = '';
+
+                    // Проверяем, что поле `sizes` присутствует
+                    if (data.sizes && Array.isArray(data.sizes)) {
+                        for (const size of data.sizes) {
+                            if (size.name === 'XXXL') {
+                                originalUrl = size.url; // Самая большая версия
+                            } else if (size.name === 'M') {
+                                mUrl = size.url; // Средняя версия
+                            }
+                            // Если уже нашли обе ссылки, можно прервать цикл
+                            if (originalUrl && mUrl) break;
+                        }
+                    }
+
+                    // В случае отсутствия полей `sizes`, пробуем получить прямую ссылку на файл
+                    if (!originalUrl && data.file) {
+                        originalUrl = data.file;
+                    }
+
+                    return { originalUrl, mUrl };
+                } catch (error) {
+                    console.error('Error fetching file URLs:', error);
+                    return { originalUrl: '', mUrl: '' };
+                }
+            }
+
+        // Функция для загрузки и отображения данных из JSON
+        async function loadData() {
+            try {
+                const jsonUrl = await fetchJsonLink();
+                if (!jsonUrl) {
+                    console.error('Failed to fetch the JSON URL.');
+                    return;
+                }
+
+                // Загружаем JSON файл с полученной динамической ссылки
+                const response = await fetch(jsonUrl);
+                const data = await response.json();
+
+                // Создаем карту Leaflet
+                const map = L.map('map').setView([54.611403, 39.733889], 15);
+
+                // Добавляем слой OpenStreetMap как базовую карту
+                L.tileLayer('https://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}&v=1.1').addTo(map);
+
+                // Обходим данные JSON и добавляем маркеры на карту
+                const promises = data.map(async item => {
+                    const { latitude, longitude } = item.coordinates;
+                    const { file_name, public_key } = item;
+
+                    // Получаем ссылки на файлы по public_key и file_name
+                    const { originalUrl, mUrl } = await fetchFileUrls(public_key, file_name);
+
+                    const popupContent = `
+                    <div>
+                        <h3>${file_name}</h3>
+                        <img src="${mUrl}" alt="${file_name}" style="max-width: 200px; max-height: 200px; cursor: pointer;" onclick="showFullscreen('${originalUrl}')">
+                    </div>`;
+
+                    // Создаем кастомную иконку маркера (черный круг диаметром 10 пикселей)
+                    const blackCircleIcon = L.divIcon({
+                        className: 'custom-marker',
+                        iconSize: [10, 10],
+                        iconAnchor: [5, 5],
+                        html: '<div style="width: 10px; height: 10px; background-color: black; border-radius: 50%;"></div>'
+                    });
+
+                    // Создаем маркер с кастомной иконкой и всплывающим окном
+                    L.marker([latitude, longitude], { icon: blackCircleIcon }).bindPopup(popupContent, {
+                        maxWidth: 'auto',
+                        className: 'custom-popup'
+                    }).addTo(map);
+                });
+
+                await Promise.all(promises);
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+            }  
+        }
+
+        // Функция для отображения увеличенной фотографии на всю страницу
+        function showFullscreen(imageUrl) {
+            const expandedImage = document.getElementById('expanded-image');
+            expandedImage.src = imageUrl;
+            document.getElementById('fullscreen-image').style.display = 'flex';
+        }
+
+        // Закрытие увеличенной фотографии при клике на нее
+        document.getElementById('fullscreen-image').onclick = function() {
+            this.style.display = 'none';
+        };    
+
+        // Вызываем функцию загрузки данных при загрузке страницы
+        window.onload = loadData;
+    </script>
+</body>
+</html>
